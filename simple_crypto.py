@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import secrets
@@ -73,7 +74,16 @@ class Block:
             'previous_hash': self.previous_hash,
             'nonce': self.nonce
         }, sort_keys=True).encode()
-        return hashlib.sha256(block_string).hexdigest()
+        # Use scrypt to generate a digest and then encode it with base64
+        digest = hashlib.scrypt(
+            block_string,
+            salt=b'blockchain',
+            n=2 ** 12,
+            r=8,
+            p=1,
+            dklen=32,
+        )
+        return base64.b64encode(digest).decode()
 
 class Blockchain:
     """A minimal blockchain with proof of work."""
@@ -98,9 +108,11 @@ class Blockchain:
         return False
 
     def proof_of_work(self, block: Block) -> str:
+        """Simple proof of work using the base64+scrypt hash."""
         block.nonce = 0
         computed_hash = block.compute_hash()
-        while not computed_hash.startswith('0' * Blockchain.difficulty):
+        target = '0' * Blockchain.difficulty
+        while not computed_hash.startswith(target):
             block.nonce += 1
             computed_hash = block.compute_hash()
         return computed_hash
@@ -136,24 +148,98 @@ class Blockchain:
         return balance
 
 
+class Node:
+    """A minimal peer that holds a wallet and a blockchain."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.wallet = Wallet()
+        self.blockchain = Blockchain()
+        self.peers: List['Node'] = []
+
+    def register_peer(self, peer: 'Node') -> None:
+        if peer is not self and peer not in self.peers:
+            self.peers.append(peer)
+
+    def broadcast_transaction(self, tx: Transaction) -> None:
+        for peer in self.peers:
+            peer.receive_transaction(tx)
+
+    def receive_transaction(self, tx: Transaction) -> None:
+        self.blockchain.add_transaction(tx)
+
+    def submit_transaction(self, receiver: str, amount: float) -> Transaction:
+        """Create a transaction from this node and broadcast it."""
+        tx = Transaction.create(self.wallet, receiver, amount)
+        self.blockchain.add_transaction(tx)
+        self.broadcast_transaction(tx)
+        return tx
+
+    def broadcast_block(self, block: Block) -> None:
+        for peer in self.peers:
+            peer.receive_block(block)
+
+    def receive_block(self, block: Block) -> None:
+        if block.previous_hash == self.blockchain.last_block().hash:
+            self.blockchain.add_block(block, block.hash)
+
+    def mine(self) -> Optional[Block]:
+        new_block = self.blockchain.mine()
+        if new_block:
+            self.broadcast_block(new_block)
+        return new_block
+
+    def sync(self) -> None:
+        """Synchronize the blockchain with peers (longest chain wins)."""
+        longest = self.blockchain.chain
+        for peer in self.peers:
+            if len(peer.blockchain.chain) > len(longest):
+                longest = peer.blockchain.chain
+        if longest is not self.blockchain.chain:
+            self.blockchain.chain = [
+                Block(
+                    b.index,
+                    b.timestamp,
+                    b.transactions,
+                    b.previous_hash,
+                    b.nonce,
+                )
+                for b in longest
+            ]
+
+
 def demo() -> None:
-    blockchain = Blockchain()
-    alice = Wallet()
-    bob = Wallet()
-    print('Alice address:', alice.address)
-    print('Bob address:', bob.address)
+    alice = Node('Alice')
+    bob = Node('Bob')
+    carol = Node('Carol')
 
-    tx1 = Transaction.create(alice, bob.address, 10)
-    blockchain.add_transaction(tx1)
+    # register peers
+    alice.register_peer(bob)
+    alice.register_peer(carol)
+    bob.register_peer(alice)
+    bob.register_peer(carol)
+    carol.register_peer(alice)
+    carol.register_peer(bob)
 
-    mined = blockchain.mine()
+    print('Alice address:', alice.wallet.address)
+    print('Bob address:', bob.wallet.address)
+    print('Carol address:', carol.wallet.address)
+
+    # Alice sends coins to Bob and broadcasts the transaction
+    alice.submit_transaction(bob.wallet.address, 5)
+
+    # Alice mines the transaction and broadcasts the block
+    mined = alice.mine()
     if mined:
-        print('Mined block', mined.index, mined.hash)
-    else:
-        print('No block mined.')
+        print('Alice mined block', mined.index, mined.hash)
 
-    print('Alice balance:', blockchain.get_balance(alice.address))
-    print('Bob balance:', blockchain.get_balance(bob.address))
+    # Peers synchronize their chains
+    bob.sync()
+    carol.sync()
+
+    print('Alice balance:', alice.blockchain.get_balance(alice.wallet.address))
+    print('Bob balance:', bob.blockchain.get_balance(bob.wallet.address))
+    print('Carol balance:', carol.blockchain.get_balance(carol.wallet.address))
 
 
 if __name__ == '__main__':
