@@ -5,6 +5,9 @@ import secrets
 import time
 from typing import Any, Dict, List, Optional
 
+# Name of this toy cryptocurrency
+COIN_NAME = "Scryptify"
+
 class Wallet:
     """A very small wallet with a toy signing mechanism."""
     def __init__(self) -> None:
@@ -209,6 +212,7 @@ class Node:
 
 
 def demo() -> None:
+    print(f"--- {COIN_NAME} Demo ---")
     alice = Node('Alice')
     bob = Node('Bob')
     carol = Node('Carol')
